@@ -1,0 +1,44 @@
+﻿name: Búsqueda diaria de alquileres
+
+on:
+  schedule:
+    - cron: '0 12,21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  buscar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear config.json desde secrets
+        run: |
+          echo '{
+            "telegram_token": "${{ secrets.TELEGRAM_TOKEN }}",
+            "telegram_chat_ids": ${{ secrets.TELEGRAM_CHAT_IDS }}
+          }' > config.json
+
+      - name: Ejecutar búsqueda
+        run: python rental_alert.py
+
+      - name: Guardar seen_listings.json en el repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_listings.json
+          git diff --cached --quiet || git commit -m "chore: actualizar seen_listings [skip ci]"
+          git push
