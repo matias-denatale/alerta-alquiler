@@ -26,11 +26,18 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Crear config.json desde secrets
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
         run: |
-          echo '{
-            "telegram_token": "${{ secrets.TELEGRAM_TOKEN }}",
-            "telegram_chat_ids": ${{ secrets.TELEGRAM_CHAT_IDS }}
-          }' > config.json
+          python3 -c "
+import json, os
+config = {
+    'telegram_token':    os.environ['TELEGRAM_TOKEN'],
+    'telegram_chat_ids': json.loads(os.environ['TELEGRAM_CHAT_IDS'])
+}
+json.dump(config, open('config.json', 'w'))
+"
 
       - name: Ejecutar búsqueda
         run: python rental_alert.py
