@@ -3,5 +3,7 @@
     "telegram_chat_ids": [
         "111222333",
         "444555666"
-    ]
+    ],
+    "ml_client_id":     "TU_APP_ID_DE_ML",
+    "ml_client_secret": "TU_CLIENT_SECRET_DE_ML"
 }
