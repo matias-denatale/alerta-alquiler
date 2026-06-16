@@ -8,7 +8,7 @@
 
 ## TL;DR para retomar en frío
 
-El bot scrapea alquileres en CABA y avisa por Telegram. Corría en **GitHub Actions 2×/día pero estaba prácticamente ciego**: las IPs de datacenter (Azure) que usa Actions están bloqueadas por los anti-bots de los portales. **Decisión central: mover la ejecución a la PC local con Windows Task Scheduler**, porque desde una IP residencial todo ya funciona. El resto del trabajo es limpiar código muerto, externalizar filtros a `config.json` y agregar TTL al historial.
+El bot scrapea alquileres en CABA y avisa por Telegram. **Corría en GitHub Actions 2×/día y funcionaba** (persistía estado, encontraba algunas propiedades), pero con **bajo volumen** (~+1/día vs 24-67 en una corrida local). **Decisión del usuario: mover la ejecución a la PC local con Windows Task Scheduler**, para maximizar cobertura (la primera corrida local agarra todo el backlog), esquivar cualquier bloqueo por IP de datacenter, y no depender de la nube. Trade-off aceptado: la PC tiene que estar prendida a la hora agendada. El resto del trabajo es limpiar código muerto, externalizar filtros a `config.json` y agregar TTL al historial.
 
 **NO hace falta `curl-cffi`** — se probó en vivo y no mejora nada sobre el `cloudscraper` actual (ver evidencia).
 
@@ -68,20 +68,21 @@ Ejecutado contra la URL real del bot y la URL simple de debug, con `impersonate`
 
 > Nota técnica (confirmada por búsqueda web): `curl-cffi` resuelve solo el **fingerprint TLS/JA3**, NO los challenges de JavaScript de Cloudflare ni la **reputación de IP**. Por eso no arregla el bloqueo de Actions.
 
-### 3. Forense de GitHub Actions (git history)
+### 3. Forense de GitHub Actions (git history — CORREGIDO)
 
-- El workflow se creó el 2026-06-06 ~17:33.
-- `seen_listings.json` tiene **solo 2 commits**: el inicial (93 entradas, de corridas locales) y **una única** auto-actualización del bot de Actions (`cae5195`, 94 entradas).
-- **La única corrida de Actions que commiteó algo agregó 1 sola propiedad** (93 → 94). Con el mismo código, la IP local encuentra 24-67 por corrida.
-- El commit más reciente del usuario es *"fix: headers de browser + retry 403 en ArgProp"* → los 403 los vio en Actions, no localmente.
+> ⚠️ Mi análisis inicial dijo "Actions corrió 1 sola vez y está ciego". **Era falso** — estaba mirando el clon local que estaba 20 commits atrás del remoto. Al traer `origin/main` apareció la verdad:
 
-**Conclusión:** GitHub Actions está bloqueado por IP de datacenter. ArgProp da 403, ML API muerta, ZonaProp bloqueado. Por eso correr local es el arreglo real.
+- Actions **viene corriendo confiable 2×/día desde el 2026-06-06 hasta el 2026-06-15** (20+ auto-commits `[skip ci]`).
+- **Persiste el estado**: cada run commitea `seen_listings.json` de vuelta y lo recupera en el siguiente. → Prioridad B (re-envíos) **ya estaba resuelta en Actions**, contrario a lo que dije antes.
+- Crecimiento de entradas: 93 (06-06) → 94 → 97 (06-08) → 104 (06-12) → 104 (06-15). **+11 en 9 días (~1/día).** Una corrida local sola encontró 24-67.
+
+**Conclusión honesta (ambigua):** Actions funciona pero con bajo volumen. No se pudo determinar si el goteo es por **bloqueo parcial** (ArgProp 403 / ZonaProp) o porque con filtros tan ajustados **genuinamente aparecen ~1-2 listings nuevos/día** una vez agotado el backlog. Para zanjarlo haría falta: (a) los logs por-fuente de los runs de Actions (GitHub web / `gh run view --log`), o (b) una corrida local de prueba contando nuevos vs los ~104 ya vistos. **El usuario eligió migrar a local igual** — válido: la primera corrida local agarra el backlog completo y elimina la duda del bloqueo de raíz.
 
 ---
 
 ## Decisiones clave aprobadas
 
-1. **Ejecutar local con Windows Task Scheduler, 2×/día.** Reemplaza GitHub Actions como vía principal. Elide el bloqueo por IP de datacenter (prioridad A) y hace que `seen_listings.json` persista naturalmente en disco (prioridad B). Trade-off aceptado: la PC tiene que estar prendida a la hora agendada (es una desktop; agendar ~9:00 y ~19:00).
+1. **Ejecutar local con Windows Task Scheduler, 2×/día.** Reemplaza GitHub Actions como vía principal. Motivo: maximizar cobertura (la primera corrida local agarra todo el backlog) y esquivar cualquier posible bloqueo por IP de datacenter (prioridad A). Nota: la persistencia de `seen_listings.json` (prioridad B) ya funcionaba en Actions; local también la mantiene. Trade-off aceptado: la PC tiene que estar prendida a la hora agendada (es una desktop; agendar ~9:00 y ~19:00).
 2. **No usar `curl-cffi`.** El probe demostró que no mejora nada. Mantener `cloudscraper`.
 3. **Borrar el workflow de GitHub Actions** (`.github/workflows/busqueda_diaria.yml`). ← hecho en este handoff.
 4. **Borrar código muerto:** `scrape_mercadolibre()` (API) + `get_ml_token()`, `scrape_properati()`, `scrape_roomix()`.
