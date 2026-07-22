@@ -95,3 +95,60 @@ Para ver/editar/borrar: abrir el **Programador de tareas** de Windows.
 - [ ] `config.json` con token y 2 chat_ids
 - [ ] `run_bot.bat` probado y llegó el mensaje a Telegram
 - [ ] Tarea `AlertaAlquilerCABA` creada (09/14/19 hs) y probada con `Start-ScheduledTask`
+
+---
+
+# PARTE B — Tarea programada del "plan de contacto" (Claude) en esta PC
+
+> Además del bot, Matías quiere que en esta misma PC (que está prendida 24/7) corra
+> la **tarea diaria de las 6 am** que arma el plan de a qué inmobiliarias contactar,
+> leyendo una base de Notion. Esto NO es un script de Python: corre dentro de la app
+> de Claude (Cowork).
+
+## Requisitos
+1. **App de Claude (desktop) instalada** en esta PC e iniciada sesión con la cuenta de Matías.
+2. **Conector de Notion autorizado** en Claude, con permiso de **lectura y escritura**
+   (Configuración → Conectores). Es el mismo Notion donde está la base
+   "Inmobiliarias CABA — Seguimiento alquiler".
+
+## Cómo crear la tarea
+En una sesión de Cowork en esta PC, pedirle al agente que cree una tarea programada con
+estos datos exactos:
+
+- **taskId:** `contacto-inmobiliarias-diario`
+- **Schedule (cron, hora local):** `0 6 * * 1-5`  (lunes a viernes, 6 am)
+- **Descripción:** Plan diario de inmobiliarias a contactar, usando la base de Notion.
+- **Prompt (pegar tal cual):**
+
+```
+Sos el asistente de Matías para su búsqueda de alquiler en CABA (ingreso 1 de septiembre de 2026). Cada mañana laboral armás el plan de a qué inmobiliarias contactar hoy.
+
+FUENTE DE DATOS (Notion):
+Base "Inmobiliarias CABA — Seguimiento alquiler", data source ID: 6140f5cf-7297-47ee-b3de-ad79a3bfad45.
+Usá la herramienta de Notion para consultar/leer esa base (notion-fetch con la id collection://6140f5cf-7297-47ee-b3de-ad79a3bfad45 para ver el esquema, y notion-query-data-sources para filtrar).
+
+QUÉ HACER:
+1. Leé todas las fichas. Cada una tiene: Inmobiliaria, Barrio, Direccion, Telefono, WhatsApp, Web / Email, Prioridad, Estado, Quien contacto, Ultima fecha contacto, Proximo contacto, Notas.
+2. Armá la lista de HOY combinando dos grupos, priorizando Prioridad "Alta":
+   a) Inmobiliarias con Estado "No contactada" (primeras rondas).
+   b) Inmobiliarias cuyo "Proximo contacto" sea hoy o anterior a hoy (recontacto pendiente), sin importar el estado, salvo que estén "Descartada".
+3. Elegí entre 6 y 8 inmobiliarias para hoy. Si hay recontactos vencidos, priorizalos sobre las nuevas. Rotá los barrios para no cargar siempre el mismo.
+4. Presentá el plan del día en un mensaje claro, así:
+
+   📞 Plan de contacto — [fecha]
+   Para cada inmobiliaria: nombre — Barrio — Teléfono / WhatsApp — Web/Email — (nota previa si la hay).
+   Al final, recordale el objetivo: PH/casa/depto con patio o terraza, min 2 amb (depto >70 m²), hasta $1.500.000/mes, ingreso 1/9. Y el tip: preguntar siempre "¿tienen algo por entrar que todavía no publicaron?".
+
+5. Cerrá diciéndole que, cuando termine, te avise a quiénes contactó y qué le dijeron, y que vos actualizás la base: poné Estado="Contactada" (o el que corresponda), "Ultima fecha contacto"=hoy, "Quien contacto"=Mati/Novia/Los dos, "Proximo contacto"=hoy+7 días (si quedó en "nada por ahora"), y agregá la respuesta en Notas.
+
+Si no encontrás nada pendiente (todo contactado y sin recontactos vencidos), decíselo y felicitalo, y sugerí revisar las que están "En seguimiento".
+
+Escribí en español rioplatense, tono cercano y directo.
+```
+
+## Importante
+- Después de crearla, tocar **"Run now"** una vez para pre-aprobar los permisos de Notion,
+  así las corridas automáticas no se frenan pidiendo permiso.
+- **Evitar duplicados:** si esta tarea queda corriendo en la PC laboral, hay que
+  **desactivar o borrar** la misma tarea en la PC personal de Matías (donde se creó
+  primero), para que no corran las dos y no dupliquen las actualizaciones en Notion.
