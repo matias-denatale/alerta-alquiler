@@ -229,7 +229,7 @@ def send_telegram(token: str, chat_ids: list, text: str, preview_url: str = ""):
 # SCRAPER: ArgProp
 # Referencia: github.com/LeoArtaza/Scraper-Argenprop
 # ─────────────────────────────────────────────────────────────────────────────
-def scrape_argenprop(pages: int = 20) -> list[dict]:
+def scrape_argenprop(pages: int = 5) -> list[dict]:
     """
     Scraper para argenprop.com.
     El sitio está detrás de un challenge JS de AWS WAF que un cliente HTTP
@@ -401,7 +401,9 @@ def scrape_argenprop(pages: int = 20) -> list[dict]:
                         except Exception as e:
                             log.debug(f"ArgProp card error: {e}")
 
-                    time.sleep(1)
+                    # Pausa entre páginas: menos volumen/ritmo de requests
+                    # reduce la chance de que AWS WAF escale el bloqueo.
+                    time.sleep(2.5)
 
                 except Exception as e:
                     log.error(f"ArgProp [{tipo}] p{page_num}: {e}")
