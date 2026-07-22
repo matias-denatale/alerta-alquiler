@@ -66,8 +66,8 @@ BARRIOS_OBJETIVO = {
     "parque chacabuco",
 }
 
-PRECIO_MAX    = 1_400_000   # ARS/mes máximo (alquiler + expensas)
-AMBIENTES_MIN = 3
+PRECIO_MAX    = 1_500_000   # ARS/mes máximo (alquiler + expensas)
+AMBIENTES_MIN = 2
 
 # Lista de avisos de scrapers para enviar por Telegram al final de cada run
 _SCRAPER_WARNINGS: list[str] = []
@@ -298,9 +298,9 @@ def scrape_argenprop(pages: int = 20) -> list[dict]:
                         # ── Superficie y dormitorios ──────────────────────────
                         sup_el = card.find(class_="icono-superficie_cubierta")
                         size   = sup_el.find_parent().find("span").text.strip() if sup_el else ""
-                        # Filtrar departamentos < 80 m²
+                        # Filtrar departamentos < 70 m²
                         size_num = parse_price(size)
-                        if tipo == "departamento" and size_num and size_num < 80:
+                        if tipo == "departamento" and size_num and size_num < 70:
                             continue
 
                         dorm_el  = card.find(class_="icono-cantidad_dormitorios")
@@ -419,7 +419,7 @@ def _parse_zonaprop_postings(postings: list) -> tuple[list, dict]:
             total     = post.get("totalArea") or 0
             area      = total or covered
             size      = f"{area} m²" if area else ""
-            if prop_type == "departamento" and covered and covered < 80:
+            if prop_type == "departamento" and covered and covered < 70:
                 n_area += 1; continue
 
             location = post.get("postingLocation", {}) or {}
@@ -505,7 +505,7 @@ def scrape_zonaprop(pages: int = 5) -> list[dict]:
         page_suffix = f"-pagina-{page_num}" if page_num > 1 else ""
         url = (
             f"https://www.zonaprop.com.ar/casas-departamentos-ph-alquiler-"
-            f"{neighborhoods_slug}-3-ambientes-mas"
+            f"{neighborhoods_slug}-2-ambientes-mas"
             f"-orden-publicado-descendente{page_suffix}.html"
         )
         try:
@@ -713,7 +713,7 @@ def scrape_mercadolibre_playwright() -> list[dict]:
                             m = re.search(r"(\d+)\s*m²", card_text)
                             if m:
                                 area = int(m.group(1))
-                            if tipo_nombre == "departamento" and area and area < 80:
+                            if tipo_nombre == "departamento" and area and area < 70:
                                 continue
 
                             title_lower = title.lower()
@@ -855,7 +855,7 @@ def scrape_mercadolibre(access_token: str = "") -> list[dict]:
                         if rooms and rooms < AMBIENTES_MIN:
                             continue
 
-                        # Superficie (deptos: mín 80 m²)
+                        # Superficie (deptos: mín 70 m²)
                         area_val = attrs.get("COVERED_AREA") or attrs.get("TOTAL_AREA") or ""
                         try:
                             area = int(str(area_val).split()[0])
@@ -870,7 +870,7 @@ def scrape_mercadolibre(access_token: str = "") -> list[dict]:
                         else:
                             tipo = "departamento"
 
-                        if tipo == "departamento" and area and area < 80:
+                        if tipo == "departamento" and area and area < 70:
                             continue
 
                         title_lower = title.lower()
