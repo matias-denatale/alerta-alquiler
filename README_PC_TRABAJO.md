@@ -12,9 +12,10 @@ y Roomix, filtra por criterios y avisa por Telegram lo nuevo (lleva historial en
 `seen_listings.json`).
 
 **Criterios de búsqueda (deben estar así en `rental_alert.py`):**
-- `PRECIO_MAX = 1_500_000`  (alquiler + expensas)
+- `PRECIO_MAX = 1_500_000` / `PRECIO_MIN = 700_000` (alquiler + expensas)
 - `AMBIENTES_MIN = 2`
-- Departamentos: solo si superan **70 m²** (los `< 70` en el código) y tienen patio/terraza/balcón
+- `M2_MIN_DEPTO = 70` (departamentos) / `M2_MIN = 50` (PH y casas) — si no se puede confirmar el área, se descarta (`area_ok()`)
+- Departamentos además requieren patio/terraza/balcón
 - Barrios: Boedo, Almagro, Parque Patricios, Balvanera, San Cristóbal, San Telmo, Parque Chacabuco
 
 ## Requisitos previos
@@ -90,7 +91,7 @@ Para ver/editar/borrar: abrir el **Programador de tareas** de Windows.
 
 ## Checklist rápido para el agente
 - [ ] Python 3.10+ disponible
-- [ ] Repo clonado y filtros verificados (1.500.000 / 2 amb / 70 m²)
+- [ ] Repo clonado y filtros verificados (700.000-1.500.000 / 2 amb / 70 m² depto, 50 m² PH-casa)
 - [ ] venv + requirements + `playwright install chromium`
 - [ ] `config.json` con token y 2 chat_ids
 - [ ] `run_bot.bat` probado y llegó el mensaje a Telegram
@@ -121,25 +122,37 @@ estos datos exactos:
 - **Prompt (pegar tal cual):**
 
 ```
-Sos el asistente de Matías para su búsqueda de alquiler en CABA (ingreso 1 de septiembre de 2026). Cada mañana laboral armás el plan de a qué inmobiliarias contactar hoy.
+Sos el asistente de Matías para su búsqueda de alquiler en CABA (ingreso 1 de septiembre de 2026). Cada mañana laboral armás el plan de a qué inmobiliarias contactar hoy, repartido entre Matías y su novia Pili, que se turnan para llamar.
 
 FUENTE DE DATOS (Notion):
 Base "Inmobiliarias CABA — Seguimiento alquiler", data source ID: 6140f5cf-7297-47ee-b3de-ad79a3bfad45.
 Usá la herramienta de Notion para consultar/leer esa base (notion-fetch con la id collection://6140f5cf-7297-47ee-b3de-ad79a3bfad45 para ver el esquema, y notion-query-data-sources para filtrar).
 
+OBJETIVO GENERAL:
+Llegar al 2026-08-01 habiendo hecho un primer contacto (Estado ya no "No contactada") con TODAS las inmobiliarias que hoy figuran como "No contactada". Cada corrida hay que recalcular el ritmo: cuántas quedan pendientes de primer contacto y cuántos días hábiles (lu-vi) quedan hasta el 2026-08-01, incluyendo hoy.
+
 QUÉ HACER:
 1. Leé todas las fichas. Cada una tiene: Inmobiliaria, Barrio, Direccion, Telefono, WhatsApp, Web / Email, Prioridad, Estado, Quien contacto, Ultima fecha contacto, Proximo contacto, Notas.
-2. Armá la lista de HOY combinando dos grupos, priorizando Prioridad "Alta":
-   a) Inmobiliarias con Estado "No contactada" (primeras rondas).
-   b) Inmobiliarias cuyo "Proximo contacto" sea hoy o anterior a hoy (recontacto pendiente), sin importar el estado, salvo que estén "Descartada".
-3. Elegí entre 6 y 8 inmobiliarias para hoy. Si hay recontactos vencidos, priorizalos sobre las nuevas. Rotá los barrios para no cargar siempre el mismo.
-4. Presentá el plan del día en un mensaje claro, así:
+2. Separá dos grupos:
+   a) PRIMER CONTACTO: Estado = "No contactada".
+   b) RECONTACTO: "Proximo contacto" es hoy o anterior a hoy, Estado distinto de "Descartada".
+3. Calculá la meta de HOY para primer contacto = techo(cantidad de "No contactada" que quedan / días hábiles restantes hasta el 2026-08-01). Piso de 12 en total (6 y 6) mientras haya al menos 12 "No contactada" pendientes; si quedan menos de 12, repartilas todas hoy. Los recontactos vencidos van aparte, no compiten por ese cupo — sumalos a la lista del día y repartilos también entre los dos.
+4. Priorizá Prioridad "Alta" dentro de cada grupo y rotá barrios para no cargar siempre el mismo.
+5. Dividí la lista de hoy en dos mitades lo más parejas posible (aprox. 6 y 6), alternando por prioridad/barrio para que a ambos les toque una mezcla similar: Grupo Matías y Grupo Pili.
+6. Presentá DOS bloques bien separados:
 
-   📞 Plan de contacto — [fecha]
+   BLOQUE 1 (para Matías):
+   📞 Tu plan de hoy — [fecha]
    Para cada inmobiliaria: nombre — Barrio — Teléfono / WhatsApp — Web/Email — (nota previa si la hay).
-   Al final, recordale el objetivo: PH/casa/depto con patio o terraza, min 2 amb (depto >70 m²), hasta $1.500.000/mes, ingreso 1/9. Y el tip: preguntar siempre "¿tienen algo por entrar que todavía no publicaron?".
 
-5. Cerrá diciéndole que, cuando termine, te avise a quiénes contactó y qué le dijeron, y que vos actualizás la base: poné Estado="Contactada" (o el que corresponda), "Ultima fecha contacto"=hoy, "Quien contacto"=Mati/Novia/Los dos, "Proximo contacto"=hoy+7 días (si quedó en "nada por ahora"), y agregá la respuesta en Notas.
+   BLOQUE 2 (reporte para Pili — texto plano, listo para copiar y pegar tal cual en WhatsApp, sin necesitar edición):
+   📞 Plan de hoy para vos, Pili — [fecha]
+   Para cada inmobiliaria: nombre — Barrio — Teléfono / WhatsApp — Web/Email — (nota previa si la hay).
+
+   Al final de AMBOS bloques, recordá el objetivo: PH/casa/depto con patio o terraza, min 2 amb (depto >70 m²), hasta $1.500.000/mes, ingreso 1/9. Y el tip: preguntar siempre "¿tienen algo por entrar que todavía no publicaron?".
+
+7. Después de los dos bloques, agregá una línea de seguimiento de ritmo: cuántas "No contactada" quedan sin cubrir después de hoy, y si el ritmo actual alcanza para terminar antes del 2026-08-01 (si no alcanza, avisá que hay que subir la cantidad diaria).
+8. Cerrá diciéndole a Matías que, cuando los dos terminen de llamar, te avise a quiénes contactaron y qué les dijeron, y que vos actualizás la base: poné Estado="Contactada" (o el que corresponda), "Ultima fecha contacto"=hoy, "Quien contacto"=Mati/Novia/Los dos, "Proximo contacto"=hoy+7 días (si quedó en "nada por ahora"), y agregá la respuesta en Notas.
 
 Si no encontrás nada pendiente (todo contactado y sin recontactos vencidos), decíselo y felicitalo, y sugerí revisar las que están "En seguimiento".
 

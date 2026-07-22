@@ -5,13 +5,24 @@ Ejecutá este script UNA SOLA VEZ para obtener los chat IDs de Telegram.
 Pasos previos:
   1. Creá un bot con @BotFather en Telegram → obtené el TOKEN
   2. Vos y tu novia escribanle un mensaje al bot (o /start)
-  3. Reemplazá TOKEN abajo con tu token real
+  3. Poné el token en config.json (telegram_token) o pasalo por variable de entorno TELEGRAM_TOKEN
   4. Ejecutá: python get_chat_id.py
 """
 
+import json
+import os
+import sys
+
 import requests
 
-TOKEN = "8949453950:AAE_rkyXg641tpXL2l_epxfgiVuRZInlhSM"   # ← reemplazá esto
+sys.stdout.reconfigure(encoding="utf-8")
+
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+if not TOKEN and os.path.exists("config.json"):
+    with open("config.json", encoding="utf-8") as f:
+        TOKEN = json.load(f).get("telegram_token")
+if not TOKEN:
+    TOKEN = input("Pegá el token de Telegram (BotFather): ").strip()
 
 url  = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
 resp = requests.get(url, timeout=10)

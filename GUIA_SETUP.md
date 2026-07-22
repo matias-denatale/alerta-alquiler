@@ -186,6 +186,9 @@ Todos los filtros están al inicio de `rental_alert.py`, fáciles de cambiar:
 
 ```python
 BARRIOS_OBJETIVO = {"boedo", "almagro", ...}  # agregar/quitar barrios
-PRECIO_MAX    = 1_400_000   # máximo en ARS
-AMBIENTES_MIN = 3           # mínimo de ambientes
+PRECIO_MAX    = 1_500_000   # máximo en ARS (alquiler + expensas)
+PRECIO_MIN    = 700_000     # mínimo en ARS, descarta publicaciones de baja calidad
+AMBIENTES_MIN = 2           # mínimo de ambientes
+M2_MIN_DEPTO  = 70          # piso de m² para departamentos
+M2_MIN        = 50          # piso de m² para PH y casas
 ```

@@ -67,7 +67,10 @@ BARRIOS_OBJETIVO = {
 }
 
 PRECIO_MAX    = 1_500_000   # ARS/mes máximo (alquiler + expensas)
+PRECIO_MIN    = 700_000     # ARS/mes mínimo, para descartar publicaciones de baja calidad
 AMBIENTES_MIN = 2
+M2_MIN_DEPTO  = 70          # piso de m² para departamentos
+M2_MIN        = 50          # piso de m² para PH y casas
 
 # Lista de avisos de scrapers para enviar por Telegram al final de cada run
 _SCRAPER_WARNINGS: list[str] = []
@@ -124,6 +127,13 @@ def parse_price(text: str) -> int | None:
     """'$ 1.200.000' o '1200000' → 1200000"""
     digits = re.sub(r"[^\d]", "", text or "")
     return int(digits) if digits else None
+
+
+def area_ok(tipo: str, area: int | None) -> bool:
+    """True si el área declarada cumple el piso mínimo según el tipo.
+    Si no se pudo determinar el área, no se puede confirmar el mínimo → False."""
+    minimo = M2_MIN_DEPTO if tipo == "departamento" else M2_MIN
+    return bool(area) and area >= minimo
 
 
 def barrio_match(name: str) -> bool:
@@ -222,141 +232,182 @@ def send_telegram(token: str, chat_ids: list, text: str, preview_url: str = ""):
 def scrape_argenprop(pages: int = 20) -> list[dict]:
     """
     Scraper para argenprop.com.
+    El sitio está detrás de un challenge JS de AWS WAF que un cliente HTTP
+    plano (requests/cloudscraper) no puede resolver — usamos Playwright
+    (browser real) porque el challenge se resuelve solo, sin intervención
+    humana, apenas se ejecuta el JS de la página.
     Busca toda la Capital Federal por tipo y filtra por barrio en Python.
-    20 páginas × 3 tipos × ~20 cards = ~1200 listings procesados.
     """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        log.warning("ArgProp: playwright no instalado. Ejecutá: pip install playwright && playwright install chromium")
+        return []
+
     listings = []
     tipos = ["departamento", "ph", "casa"]
 
-    for tipo in tipos:
-        for page in range(1, pages + 1):
-            url = (
-                f"https://www.argenprop.com/{tipo}-alquiler-localidad-capital-federal"
-                f"-orden-masnuevos-pagina-{page}"
-            )
-            try:
-                r = cs_get(url, timeout=30)
-                if r.status_code == 404:
-                    break
-                if r.status_code == 403:
-                    time.sleep(3)
-                    r = cs_get(url, timeout=30)
-                if r.status_code == 403:
-                    log.warning(f"ArgProp [{tipo}]: bloqueado (403) — IP no permitida en este entorno")
-                    break
-                r.raise_for_status()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="es-AR",
+        )
+        page = context.new_page()
 
-                soup = BeautifulSoup(r.text, "html.parser")
-                # Las cards usan exactamente la clase "listing__item" (no subclases)
-                cards = soup.find_all(
-                    "div", class_=lambda x: x == "listing__item" if x else False
+        for tipo in tipos:
+            for page_num in range(1, pages + 1):
+                url = (
+                    f"https://www.argenprop.com/{tipo}-alquiler-localidad-capital-federal"
+                    f"-orden-masnuevos-pagina-{page_num}"
                 )
+                try:
+                    resp = page.goto(url, timeout=30_000)
+                    if resp and resp.status == 404:
+                        break
 
-                if not cards:
-                    break  # sin más páginas
-
-                for card in cards:
+                    # El challenge de AWS WAF se resuelve solo con JS y la página
+                    # recarga; esperamos por la card real en vez de un tiempo fijo
+                    # (un sleep fijo es una carrera: a veces el reload no terminó).
                     try:
-                        # ── Precio ────────────────────────────────────────────
-                        price_el    = card.find(class_="card__price")
-                        currency_el = card.find(class_="card__currency")
-                        currency    = (currency_el.text.strip() if currency_el else "").upper()
+                        page.wait_for_selector("div.listing__item", timeout=15_000)
+                    except Exception:
+                        html = page.content()
+                        if "awsWafCookieDomainList" in html:
+                            log.warning(f"ArgProp [{tipo}]: bloqueado por challenge JS de AWS WAF (no se resolvió)")
+                            warn = "⚠️ ArgProp bloqueado por verificación anti-bot (AWS WAF)"
+                            if warn not in _SCRAPER_WARNINGS:
+                                _SCRAPER_WARNINGS.append(warn)
+                        break  # ni challenge sin resolver ni cards → sin más páginas
 
-                        # Solo ARS; saltear USD u otras monedas
-                        if currency and currency not in ("$", "ARS", ""):
-                            continue
+                    html = page.content()
+                    soup = BeautifulSoup(html, "html.parser")
+                    # Las cards usan exactamente la clase "listing__item" (no subclases)
+                    cards = soup.find_all(
+                        "div", class_=lambda x: x == "listing__item" if x else False
+                    )
 
-                        price_text = price_el.text.strip() if price_el else ""
-                        price_num  = parse_price(price_text)
+                    if not cards:
+                        break  # sin más páginas
 
-                        if price_num and price_num > PRECIO_MAX:
-                            continue  # ya supera el límite sin expensas
+                    for card in cards:
+                        try:
+                            # ── Precio ────────────────────────────────────────
+                            price_el    = card.find(class_="card__price")
+                            currency_el = card.find(class_="card__currency")
+                            currency    = (currency_el.text.strip() if currency_el else "").upper()
 
-                        # ── Expensas ──────────────────────────────────────────
-                        exp_el   = card.find(class_="card__expenses")
-                        expenses = exp_el.text.strip() if exp_el else ""
-                        exp_num  = parse_price(expenses)
-
-                        if price_num and exp_num and (price_num + exp_num) > PRECIO_MAX:
-                            continue
-
-                        # ── Barrio ────────────────────────────────────────────
-                        loc_el       = card.find(class_="card__title--primary")
-                        location_txt = (loc_el.text.strip() if loc_el else "").lower()
-                        barrio = next(
-                            (b for b in BARRIOS_OBJETIVO if b in location_txt), ""
-                        )
-                        if not barrio:
-                            continue
-
-                        # ── Título y dirección ────────────────────────────────
-                        title_el = card.find(class_="card__title")
-                        title    = title_el.text.strip() if title_el else ""
-                        addr_el  = card.find(class_="card__address")
-                        address  = addr_el.text.strip() if addr_el else ""
-
-                        # ── Superficie y dormitorios ──────────────────────────
-                        sup_el = card.find(class_="icono-superficie_cubierta")
-                        size   = sup_el.find_parent().find("span").text.strip() if sup_el else ""
-                        # Filtrar departamentos < 70 m²
-                        size_num = parse_price(size)
-                        if tipo == "departamento" and size_num and size_num < 70:
-                            continue
-
-                        dorm_el  = card.find(class_="icono-cantidad_dormitorios")
-                        bedrooms = dorm_el.find_parent().find("span").text.strip() if dorm_el else ""
-
-                        # ── Texto completo para buscar features ───────────────
-                        desc_el   = card.find(class_="card__info")
-                        desc      = desc_el.text.lower() if desc_el else ""
-                        full_text = f"{title} {desc} {address}".lower()
-
-                        # Saltar si tiene cochera/garage (salvo que diga "sin cochera")
-                        if any(kw in full_text for kw in ("cochera", "garage")):
-                            if not any(kw in full_text for kw in ("sin cochera", "sin garage")):
+                            # Solo ARS; saltear USD u otras monedas
+                            if currency and currency not in ("$", "ARS", ""):
                                 continue
 
-                        outdoor_kws = ("patio", "terraza", "jardín", "jardin", "balcón", "balcon")
-                        features = []
-                        for kw in outdoor_kws:
-                            if kw in full_text:
-                                features.append(
-                                    kw.replace("jardin", "jardín").replace("balcon", "balcón").capitalize()
-                                )
+                            price_text = price_el.text.strip() if price_el else ""
+                            price_num  = parse_price(price_text)
 
-                        # Departamentos requieren patio O terraza
-                        if tipo == "departamento" and not features:
-                            continue
+                            if price_num and price_num > PRECIO_MAX:
+                                continue  # ya supera el límite sin expensas
+                            if price_num and price_num < PRECIO_MIN:
+                                continue
 
-                        # ── Link ──────────────────────────────────────────────
-                        link_el = card.find("a", href=True)
-                        href    = link_el["href"] if link_el else ""
-                        link    = f"https://www.argenprop.com{href}" if href.startswith("/") else href
-                        if not link:
-                            continue
+                            # ── Expensas ────────────────────────────────────────
+                            exp_el   = card.find(class_="card__expenses")
+                            expenses = exp_el.text.strip() if exp_el else ""
+                            exp_num  = parse_price(expenses)
 
-                        listings.append({
-                            "title":        title or address or f"{tipo.upper()} en {barrio}",
-                            "price":        price_text,
-                            "expenses":     expenses,
-                            "rooms":        None,
-                            "bedrooms":     bedrooms,
-                            "size":         f"{size} m²" if size else "",
-                            "neighborhood": barrio.title().replace("San Cristobal", "San Cristóbal"),
-                            "type":         tipo,
-                            "features":     list(set(features)),
-                            "url":          link,
-                            "source":       "ArgProp",
-                        })
+                            if price_num and exp_num and (price_num + exp_num) > PRECIO_MAX:
+                                continue
 
-                    except Exception as e:
-                        log.debug(f"ArgProp card error: {e}")
+                            # ── Barrio ────────────────────────────────────────
+                            loc_el       = card.find(class_="card__title--primary")
+                            location_txt = (loc_el.text.strip() if loc_el else "").lower()
+                            barrio = next(
+                                (b for b in BARRIOS_OBJETIVO if b in location_txt), ""
+                            )
+                            if not barrio:
+                                continue
 
-                time.sleep(1)
+                            # ── Título y dirección ──────────────────────────────
+                            title_el = card.find(class_="card__title")
+                            title    = title_el.text.strip() if title_el else ""
+                            addr_el  = card.find(class_="card__address")
+                            address  = addr_el.text.strip() if addr_el else ""
 
-            except Exception as e:
-                log.error(f"ArgProp [{tipo}] p{page}: {e}")
-                break
+                            # ── Superficie y dormitorios ────────────────────────
+                            # El prefijo del ícono cambió con el tiempo (icono- →
+                            # basico1-icon-); matcheamos por sufijo para no
+                            # depender del prefijo exacto.
+                            sup_el = card.select_one('[class*="icon-superficie_cubierta"]')
+                            size   = sup_el.find_parent().find("span").text.strip() if sup_el else ""
+                            # El m² viene con coma decimal ("37,80 m²"); parse_price
+                            # borra todo lo no-numérico, así que tomamos solo la
+                            # parte entera antes de la coma.
+                            size_num = parse_price(size.split(",")[0]) if size else None
+                            if not area_ok(tipo, size_num):
+                                continue
+
+                            dorm_el  = card.select_one('[class*="icon-cantidad_dormitorios"]')
+                            bedrooms = dorm_el.find_parent().find("span").text.strip() if dorm_el else ""
+
+                            # ── Texto completo para buscar features ─────────────
+                            desc_el   = card.find(class_="card__info")
+                            desc      = desc_el.text.lower() if desc_el else ""
+                            full_text = f"{title} {desc} {address}".lower()
+
+                            # Saltar si tiene cochera/garage (salvo que diga "sin cochera")
+                            if any(kw in full_text for kw in ("cochera", "garage")):
+                                if not any(kw in full_text for kw in ("sin cochera", "sin garage")):
+                                    continue
+
+                            outdoor_kws = ("patio", "terraza", "jardín", "jardin", "balcón", "balcon")
+                            features = []
+                            for kw in outdoor_kws:
+                                if kw in full_text:
+                                    features.append(
+                                        kw.replace("jardin", "jardín").replace("balcon", "balcón").capitalize()
+                                    )
+
+                            # Departamentos requieren patio O terraza
+                            if tipo == "departamento" and not features:
+                                continue
+
+                            # ── Link ─────────────────────────────────────────────
+                            link_el = card.find("a", href=True)
+                            href    = link_el["href"] if link_el else ""
+                            link    = f"https://www.argenprop.com{href}" if href.startswith("/") else href
+                            if not link:
+                                continue
+
+                            listings.append({
+                                "title":        title or address or f"{tipo.upper()} en {barrio}",
+                                "price":        price_text,
+                                "expenses":     expenses,
+                                "rooms":        None,
+                                "bedrooms":     bedrooms,
+                                "size":         f"{size_num} m²" if size_num else "",
+                                "neighborhood": barrio.title().replace("San Cristobal", "San Cristóbal"),
+                                "type":         tipo,
+                                "features":     list(set(features)),
+                                "url":          link,
+                                "source":       "ArgProp",
+                            })
+
+                        except Exception as e:
+                            log.debug(f"ArgProp card error: {e}")
+
+                    time.sleep(1)
+
+                except Exception as e:
+                    log.error(f"ArgProp [{tipo}] p{page_num}: {e}")
+                    break
+
+        browser.close()
 
     log.info(f"ArgProp: {len(listings)} propiedades encontradas")
     return listings
@@ -395,31 +446,51 @@ def _parse_zonaprop_postings(postings: list) -> tuple[list, dict]:
                 expenses_num = expenses_num.get("amount", 0) or 0
             if price_num and (price_num + expenses_num) > PRECIO_MAX:
                 n_price += 1; continue
+            if price_num and price_num < PRECIO_MIN:
+                n_price += 1; continue
 
             rooms = 0
+            covered = total = 0
             for feat_group in ("mainFeatures", "generalFeatures", "features"):
-                for feat in (post.get(feat_group) or []):
+                group = post.get(feat_group) or {}
+                # ZonaProp cambió mainFeatures de lista a dict (keyed por featureId)
+                # según la versión de la página; soportamos ambas formas.
+                feats = group.values() if isinstance(group, dict) else group
+                for feat in feats:
                     if not isinstance(feat, dict):
                         continue
                     label = (feat.get("label") or feat.get("type") or "").lower()
-                    if "ambiente" in label or "dormitorio" in label:
-                        val = feat.get("value") or feat.get("text") or ""
+                    val   = feat.get("value") or feat.get("text") or ""
+                    if not rooms and ("ambiente" in label or "dormitorio" in label):
                         try:
                             rooms = int(str(val).split()[0])
                         except Exception:
                             pass
-                        break
-                if rooms:
+                    if not covered and "cubierta" in label:
+                        try:
+                            covered = int(str(val).split()[0])
+                        except Exception:
+                            pass
+                    if not total and "superficie total" in label:
+                        try:
+                            total = int(str(val).split()[0])
+                        except Exception:
+                            pass
+                if rooms and (covered or total):
                     break
             if rooms and rooms < AMBIENTES_MIN:
                 n_rooms += 1; continue
 
-            prop_type = (post.get("realEstateType", {}).get("name", "") or "").lower()
-            covered   = post.get("coveredArea") or 0
-            total     = post.get("totalArea") or 0
-            area      = total or covered
-            size      = f"{area} m²" if area else ""
-            if prop_type == "departamento" and covered and covered < 70:
+            prop_type_raw = (post.get("realEstateType", {}).get("name", "") or "").lower()
+            # ZonaProp usa plural ("Departamentos", "Casas"); normalizamos al
+            # singular que usan el resto de los scrapers y area_ok().
+            prop_type = {"departamentos": "departamento", "casas": "casa"}.get(prop_type_raw, prop_type_raw)
+            covered = post.get("coveredArea") or covered
+            total   = post.get("totalArea") or total
+            size    = f"{total or covered} m²" if (total or covered) else ""
+            # El piso mínimo se mide sobre área cubierta: el patio/terraza/balcón
+            # es un requisito aparte, no puede "sumar" para llegar al mínimo.
+            if not area_ok(prop_type, covered):
                 n_area += 1; continue
 
             location = post.get("postingLocation", {}) or {}
@@ -514,6 +585,9 @@ def scrape_zonaprop(pages: int = 5) -> list[dict]:
 
             if r.status_code in (403, 503):
                 log.warning(f"ZonaProp: bloqueado (HTTP {r.status_code})")
+                warn = f"⚠️ ZonaProp bloqueado (HTTP {r.status_code})"
+                if warn not in _SCRAPER_WARNINGS:
+                    _SCRAPER_WARNINGS.append(warn)
                 break
             r.raise_for_status()
 
@@ -682,6 +756,8 @@ def scrape_mercadolibre_playwright() -> list[dict]:
                                 continue
                             if price_num and price_num > PRECIO_MAX:
                                 continue
+                            if price_num and price_num < PRECIO_MIN:
+                                continue
 
                             # Link — URL real sin tracking params
                             link_el   = card.select_one("a[href]")
@@ -708,12 +784,12 @@ def scrape_mercadolibre_playwright() -> list[dict]:
                             if rooms and rooms < AMBIENTES_MIN:
                                 continue
 
-                            # Superficie mínima para departamentos
+                            # Superficie mínima (área_ok: 70m² deptos, 50m² PH/casa)
                             area = 0
                             m = re.search(r"(\d+)\s*m²", card_text)
                             if m:
                                 area = int(m.group(1))
-                            if tipo_nombre == "departamento" and area and area < 70:
+                            if not area_ok(tipo_nombre, area):
                                 continue
 
                             title_lower = title.lower()
@@ -839,6 +915,8 @@ def scrape_mercadolibre(access_token: str = "") -> list[dict]:
                             continue
                         if currency != "ARS" or price > PRECIO_MAX:
                             continue
+                        if price and price < PRECIO_MIN:
+                            continue
 
                         # Filtrar por operación: solo alquiler
                         attrs     = {a["id"]: (a.get("value_name") or "") for a in (item.get("attributes") or [])}
@@ -855,7 +933,7 @@ def scrape_mercadolibre(access_token: str = "") -> list[dict]:
                         if rooms and rooms < AMBIENTES_MIN:
                             continue
 
-                        # Superficie (deptos: mín 70 m²)
+                        # Superficie mínima (área_ok: 70m² deptos, 50m² PH/casa)
                         area_val = attrs.get("COVERED_AREA") or attrs.get("TOTAL_AREA") or ""
                         try:
                             area = int(str(area_val).split()[0])
@@ -870,7 +948,7 @@ def scrape_mercadolibre(access_token: str = "") -> list[dict]:
                         else:
                             tipo = "departamento"
 
-                        if tipo == "departamento" and area and area < 70:
+                        if not area_ok(tipo, area):
                             continue
 
                         title_lower = title.lower()
@@ -917,7 +995,10 @@ def scrape_mercadolibre(access_token: str = "") -> list[dict]:
 def scrape_properati() -> list[dict]:
     """
     Properati es otro portal grande de inmuebles argentinos.
-    Busca por barrio + tipo usando cloudscraper para evitar bloqueos.
+    Busca por barrio + tipo, parseando las cards ("article.snippet") del HTML
+    servido (usa cloudscraper para evitar el bloqueo por fingerprint del browser).
+    Nota: "ph" no tiene resultados en Properati bajo Capital Federal a la fecha
+    de este scraper (la búsqueda devuelve 404); igual se intenta por si vuelve.
     """
     listings    = []
     seen_urls: set[str] = set()
@@ -936,10 +1017,7 @@ def scrape_properati() -> list[dict]:
                       .replace("ó", "o").replace("á", "a")
                       .replace("é", "e").replace("í", "i")
             )
-            url = (
-                f"https://www.properati.com.ar/s/"
-                f"{barrio_slug}-capital-federal/{tipo_query}/alquiler/"
-            )
+            url = f"https://www.properati.com.ar/s/{barrio_slug}/{tipo_query}/alquiler"
             try:
                 r = cs_get(url, timeout=20)
                 if not r.ok:
@@ -947,54 +1025,41 @@ def scrape_properati() -> list[dict]:
                     time.sleep(0.5)
                     continue
 
-                soup = BeautifulSoup(r.text, "html.parser")
+                soup  = BeautifulSoup(r.text, "html.parser")
+                cards = soup.select("article.snippet")
 
-                # Properati embebe los datos en window.__PRELOADED_STATE__ o similar
-                preloaded = None
-                for script in soup.find_all("script"):
-                    content = script.string or ""
-                    for marker in ("window.__PRELOADED_STATE__ = ", "window.__STATE__ = "):
-                        idx = content.find(marker)
-                        if idx >= 0:
-                            try:
-                                preloaded, _ = json.JSONDecoder().raw_decode(content, idx + len(marker))
-                            except Exception:
-                                pass
-                            break
-                    if preloaded:
-                        break
-
-                items = []
-                if preloaded:
-                    # Intentar distintas rutas según la versión del JSON
-                    items = (
-                        preloaded.get("listings", {}).get("listings", [])
-                        or preloaded.get("search", {}).get("listings", [])
-                        or preloaded.get("results", [])
-                        or []
-                    )
-
-                for item in items:
+                for card in cards:
                     try:
-                        price    = (item.get("price") or {}).get("total") or item.get("price_total") or 0
-                        currency = (item.get("price") or {}).get("currency", "ARS") or "ARS"
-                        title    = item.get("title", "") or item.get("address", "")
-                        link_raw = item.get("url") or item.get("permalink") or ""
-                        link     = link_raw if link_raw.startswith("http") else f"https://www.properati.com.ar{link_raw}"
-
+                        link = card.get("data-url") or ""
                         if not link or link in seen_urls:
                             continue
-                        if currency != "ARS" or (price and price > PRECIO_MAX):
+
+                        title_el = card.select_one(".title")
+                        price_el = card.select_one(".price")
+                        area_el  = card.select_one(".properties__area")
+                        bed_el   = card.select_one(".properties__bedrooms")
+
+                        title     = title_el.get_text(strip=True) if title_el else f"{tipo_nombre.title()} en {barrio}"
+                        price_num = parse_price(price_el.get_text(strip=True) if price_el else "")
+                        if price_num and price_num > PRECIO_MAX:
+                            continue
+                        if price_num and price_num < PRECIO_MIN:
                             continue
 
-                        title_lower = title.lower()
-                        if any(kw in title_lower for kw in ("cochera", "garage")) and \
-                           not any(kw in title_lower for kw in ("sin cochera", "sin garage")):
+                        area = parse_price(area_el.get_text(strip=True)) if area_el else None
+                        if not area_ok(tipo_nombre, area):
+                            continue
+
+                        img_alts  = " ".join(img.get("alt", "") for img in card.select("img"))
+                        full_text = f"{title} {img_alts}".lower()
+
+                        if any(kw in full_text for kw in ("cochera", "garage")) and \
+                           not any(kw in full_text for kw in ("sin cochera", "sin garage")):
                             continue
 
                         features = [
                             kw.replace("jardin", "jardín").replace("balcon", "balcón").capitalize()
-                            for kw in outdoor_kws if kw in title_lower
+                            for kw in outdoor_kws if kw in full_text
                         ]
                         if tipo_nombre == "departamento" and not features:
                             continue
@@ -1002,7 +1067,9 @@ def scrape_properati() -> list[dict]:
                         seen_urls.add(link)
                         listings.append({
                             "title":        title,
-                            "price":        f"$ {int(price):,}".replace(",", ".") if price else "",
+                            "price":        f"$ {price_num:,}".replace(",", ".") if price_num else "",
+                            "bedrooms":     bed_el.get_text(strip=True) if bed_el else "",
+                            "size":         f"{area} m²" if area else "",
                             "neighborhood": barrio.title().replace("San Cristobal", "San Cristóbal"),
                             "type":         tipo_nombre,
                             "features":     features,
@@ -1011,54 +1078,6 @@ def scrape_properati() -> list[dict]:
                         })
                     except Exception:
                         continue
-
-                if not items:
-                    # Fallback: parsear cards HTML
-                    cards = soup.select(
-                        "[class*='listing-card'], [class*='property-card'], "
-                        "[class*='PostingCard'], article"
-                    )
-                    for card in cards[:30]:
-                        try:
-                            title_el = card.select_one("h2, h3, [class*='title'], [class*='address']")
-                            price_el = card.select_one("[class*='price'], [class*='Price']")
-                            link_el  = card.select_one("a[href]")
-
-                            title    = title_el.get_text(strip=True) if title_el else ""
-                            price_t  = price_el.get_text(strip=True) if price_el else ""
-                            href     = link_el["href"] if link_el else ""
-                            link     = href if href.startswith("http") else f"https://www.properati.com.ar{href}"
-
-                            if not link or not title or link in seen_urls:
-                                continue
-                            price_num = parse_price(price_t)
-                            if price_num and price_num > PRECIO_MAX:
-                                continue
-
-                            title_lower = title.lower()
-                            if any(kw in title_lower for kw in ("cochera", "garage")) and \
-                               not any(kw in title_lower for kw in ("sin cochera", "sin garage")):
-                                continue
-
-                            features = [
-                                kw.replace("jardin", "jardín").replace("balcon", "balcón").capitalize()
-                                for kw in outdoor_kws if kw in title_lower
-                            ]
-                            if tipo_nombre == "departamento" and not features:
-                                continue
-
-                            seen_urls.add(link)
-                            listings.append({
-                                "title":        title,
-                                "price":        price_t,
-                                "neighborhood": barrio.title().replace("San Cristobal", "San Cristóbal"),
-                                "type":         tipo_nombre,
-                                "features":     features,
-                                "url":          link,
-                                "source":       "Properati",
-                            })
-                        except Exception:
-                            continue
 
             except Exception as e:
                 log.error(f"Properati [{tipo_query}/{barrio}]: {e}")
