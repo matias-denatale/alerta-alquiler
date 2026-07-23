@@ -1,4 +1,4 @@
-# 🏠 Alerta Alquiler CABA — Puesta en marcha en Windows (3 veces al día)
+# 🏠 Alerta Alquiler CABA — Puesta en marcha en Windows (6 veces al día)
 
 Estos archivos reemplazan/complementan tu repo `alerta-alquiler`. Los filtros ya
 quedaron alineados a tus criterios actuales:
@@ -14,7 +14,7 @@ quedaron alineados a tus criterios actuales:
 ## Paso 0 — Poné estos archivos en la carpeta del repo
 Copiá `rental_alert.py` (ya modificado) dentro de tu carpeta `alerta-alquiler`,
 pisando el anterior. Copiá también `run_bot.bat`, `setup_windows.bat` e
-`instalar_tarea_3x_dia.ps1` en esa misma carpeta.
+`instalar_tarea_6x_dia.ps1` en esa misma carpeta.
 
 ## Paso 1 — Setup (una sola vez)
 Doble clic en **`setup_windows.bat`**. Crea el entorno virtual, instala las
@@ -35,16 +35,16 @@ Doble clic en **`run_bot.bat`**. Debería correr y, si hay novedades, mandarlas 
 Telegram de los dos. La primera corrida manda todo lo que encuentra; las
 siguientes solo lo nuevo (lleva historial en `seen_listings.json`).
 
-## Paso 4 — Programar las 3 corridas diarias
+## Paso 4 — Programar las 6 corridas diarias
 1. Abrí PowerShell **en la carpeta del repo** (Shift + clic derecho → "Abrir
    ventana de PowerShell aquí").
 2. Corré:
    ```powershell
    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-   .\instalar_tarea_3x_dia.ps1
+   .\instalar_tarea_6x_dia.ps1
    ```
-3. Queda una tarea llamada **AlertaAlquilerCABA** que corre a las **09:00, 14:00
-   y 19:00**. Podés cambiar los horarios editando el `.ps1` (líneas `-At`).
+3. Queda una tarea llamada **AlertaAlquilerCABA** que corre a las **08:00, 12:00,
+   16:00, 18:00, 20:00 y 22:00**. Podés cambiar los horarios editando el `.ps1` (líneas `-At`).
 
 Para probar la tarea ya mismo:
 ```powershell

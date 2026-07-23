@@ -1,8 +1,8 @@
-# README — Poner el bot Alerta Alquiler a correr 3x/día (PC de trabajo)
+# README — Poner el bot Alerta Alquiler a correr 6x/día (PC de trabajo)
 
 > **Para el agente que reciba esto:** Matías quiere dejar operativo su bot de alertas
-> de alquiler en ESTA PC (Windows), que se dispare **3 veces al día (09:00, 14:00 y
-> 19:00)** y le mande las publicaciones nuevas por Telegram. Abajo está todo el paso
+> de alquiler en ESTA PC (Windows), que se dispare **6 veces al día (08:00, 12:00, 16:00,
+> 18:00, 20:00 y 22:00)** y le mande las publicaciones nuevas por Telegram. Abajo está todo el paso
 > a paso. El repo ya existe; los cambios de filtros ya fueron aplicados por Matías en
 > otra máquina, pero incluimos los valores para verificar.
 
@@ -31,9 +31,9 @@ git clone https://github.com/matias-denatale/alerta-alquiler.git
 cd alerta-alquiler
 ```
 > Si Matías ya commiteó los archivos actualizados, el repo ya trae los filtros correctos
-> y los scripts `setup_windows.bat`, `run_bot.bat` e `instalar_tarea_3x_dia.ps1`.
+> y los scripts `setup_windows.bat`, `run_bot.bat` e `instalar_tarea_6x_dia.ps1`.
 > Si NO están, copiar a esta carpeta los archivos que Matías trae aparte
-> (`rental_alert.py`, `setup_windows.bat`, `run_bot.bat`, `instalar_tarea_3x_dia.ps1`)
+> (`rental_alert.py`, `setup_windows.bat`, `run_bot.bat`, `instalar_tarea_6x_dia.ps1`)
 > y verificar los 3 valores de filtros de arriba.
 
 ## Paso 2 — Setup del entorno (una vez)
@@ -66,13 +66,13 @@ Editar `config.json` y completar:
 Debería correr y, si hay novedades, mandarlas al Telegram de ambos. La 1ª corrida manda
 todo lo que encuentra; las siguientes, solo lo nuevo.
 
-## Paso 5 — Programar las 3 corridas diarias
+## Paso 5 — Programar las 6 corridas diarias
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\instalar_tarea_3x_dia.ps1
+.\instalar_tarea_6x_dia.ps1
 ```
-Esto registra la tarea de Windows **AlertaAlquilerCABA** que corre a las **09:00, 14:00
-y 19:00**. Para probarla al toque:
+Esto registra la tarea de Windows **AlertaAlquilerCABA** que corre a las **08:00, 12:00,
+16:00, 18:00, 20:00 y 22:00**. Para probarla al toque:
 ```powershell
 Start-ScheduledTask -TaskName AlertaAlquilerCABA
 ```
@@ -95,7 +95,7 @@ Para ver/editar/borrar: abrir el **Programador de tareas** de Windows.
 - [ ] venv + requirements + `playwright install chromium`
 - [ ] `config.json` con token y 2 chat_ids
 - [ ] `run_bot.bat` probado y llegó el mensaje a Telegram
-- [ ] Tarea `AlertaAlquilerCABA` creada (09/14/19 hs) y probada con `Start-ScheduledTask`
+- [ ] Tarea `AlertaAlquilerCABA` creada (08/12/16/18/20/22 hs) y probada con `Start-ScheduledTask`
 
 ---
 
